@@ -3,8 +3,8 @@ name: COOS Community Digest
 on:
   workflow_dispatch:
   schedule:
-    # 02:59 UTC == 11:59 KST
-    - cron: '59 2 * * *'
+    # 02:30 UTC == 11:30 KST
+    - cron: '30 2 * * *'
 
 jobs:
   digest:
