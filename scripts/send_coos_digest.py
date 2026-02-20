@@ -9,6 +9,15 @@ import requests
 from bs4 import BeautifulSoup
 
 try:
+    from selenium import webdriver
+    from selenium.webdriver.chrome.options import Options as ChromeOptions
+    from webdriver_manager.chrome import ChromeDriverManager
+except ImportError:
+    webdriver = None
+    ChromeOptions = None
+    ChromeDriverManager = None
+
+try:
     from dotenv import load_dotenv
 except ImportError:
     load_dotenv = None
@@ -27,27 +36,61 @@ def load_env() -> None:
 
 
 def fetch_html(use_playwright: bool) -> str:
-    if not use_playwright:
+    """Fetch HTML. If use_playwright is False, caller can retry with Playwright on empty result."""
+
+    def fetch_with_requests():
         log("Fetching page via requests...")
         resp = requests.get(COMMUNITY_URL, timeout=20)
         resp.raise_for_status()
         return resp.text
 
-    log("Fetching page via Playwright (Chromium)...")
-    try:
-        from playwright.sync_api import sync_playwright
-    except ImportError as exc:
-        raise RuntimeError(
-            "Playwright not installed. Set USE_PLAYWRIGHT=false or install playwright."
-        ) from exc
+    def fetch_with_playwright():
+        log("Fetching page via Playwright (Chromium)...")
+        try:
+            from playwright.sync_api import sync_playwright
+        except ImportError as exc:
+            raise RuntimeError(
+                "Playwright not installed. Set USE_PLAYWRIGHT=false or install playwright."
+            ) from exc
 
-    with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
-        page = browser.new_page()
-        page.goto(COMMUNITY_URL, timeout=30000, wait_until="networkidle")
-        html = page.content()
-        browser.close()
-    return html
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=True)
+            page = browser.new_page()
+            page.goto(COMMUNITY_URL, timeout=30000, wait_until="networkidle")
+            html = page.content()
+            browser.close()
+        return html
+
+    def fetch_with_selenium():
+        if webdriver is None or ChromeOptions is None or ChromeDriverManager is None:
+            raise RuntimeError(
+                "Selenium not installed. Set USE_SELENIUM=false or install selenium + webdriver_manager"
+            )
+        log("Fetching page via Selenium (Chrome headless)...")
+        options = ChromeOptions()
+        options.add_argument("--headless=new")
+        options.add_argument("--no-sandbox")
+        options.add_argument("--disable-dev-shm-usage")
+        options.add_argument("--window-size=1280,720")
+
+        driver_path = ChromeDriverManager().install()
+        # Use executable_path for broad compatibility with Selenium bindings.
+        driver = webdriver.Chrome(executable_path=driver_path, options=options)
+        driver.get(COMMUNITY_URL)
+        driver.implicitly_wait(10)
+        html = driver.page_source
+        driver.quit()
+        return html
+
+    if use_playwright:
+        return fetch_with_playwright()
+
+    # If USE_SELENIUM=true env, prefer Selenium (for GitHub Actions alternative to Playwright)
+    use_selenium_env = os.environ.get("USE_SELENIUM", "false").lower() == "true"
+    if use_selenium_env:
+        return fetch_with_selenium()
+
+    return fetch_with_requests()
 
 
 def parse_posts(html: str):
@@ -150,6 +193,13 @@ def main():
 
     html = fetch_html(use_playwright)
     posts = parse_posts(html)
+
+    # If requests path returns nothing, retry with Playwright once automatically.
+    if not posts and not use_playwright:
+        log("No posts found via requests. Retrying with Playwright...")
+        html = fetch_html(use_playwright=True)
+        posts = parse_posts(html)
+
     log(f"Found {len(posts)} posts for today")
     body = build_email_body(posts)
     send_email(body)
