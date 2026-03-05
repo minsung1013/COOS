@@ -3,6 +3,8 @@ import os
 import re
 import smtplib
 import sys
+from datetime import timezone, timedelta
+from datetime import datetime
 from email.message import EmailMessage
 
 import requests
@@ -99,6 +101,16 @@ def parse_posts(html: str):
     rows = soup.find_all("tr")
     posts = []
     time_pattern = re.compile(r"^\d{1,2}:\d{2}$")
+    KST = timezone(timedelta(hours=9))
+    today = datetime.now(KST).date()
+    today_patterns = [
+        re.compile(rf"^{today.year}[.\-/]{today.month:02d}[.\-/]{today.day:02d}$"),
+        re.compile(rf"^{today.month:02d}[.\-/]{today.day:02d}$"),
+        re.compile(rf"^{today.month}[.\-/]{today.day}$"),
+    ]
+
+    def is_today(text: str) -> bool:
+        return bool(time_pattern.match(text)) or any(p.match(text) for p in today_patterns)
 
     for tr in rows:
         cells = tr.find_all(["td", "th"])
@@ -108,7 +120,7 @@ def parse_posts(html: str):
         date_cell = None
         for c in cells:
             text = c.get_text(strip=True)
-            if time_pattern.match(text):
+            if is_today(text):
                 date_cell = text
                 break
         if not date_cell:
@@ -135,7 +147,7 @@ def parse_posts(html: str):
 
         posts.append({"title": title, "link": link, "date": date_cell})
 
-    todays = [p for p in posts if time_pattern.match(p["date"])]
+    todays = [p for p in posts if is_today(p["date"])]
     return todays
 
 
